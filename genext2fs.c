@@ -767,37 +767,19 @@ error_msg(const char *s, ...)
 	putc('\n', stderr);
 }
 
-static void
-error_msg_and_die(const char *s, ...)
-{
-	va_list p;
-	va_start(p, s);
-	verror_msg(s, p);
-	va_end(p);
-	putc('\n', stderr);
-	exit(EXIT_FAILURE);
-}
+char genext2fs_error[256];
+#include <stdarg.h>
+#define error_msg_and_die(fmt,...) 							\
+{ 											\
+	snprintf (genext2fs_error, sizeof (genext2fs_error), fmt, ##__VA_ARGS__);	\
+};
 
-static void
-vperror_msg(const char *s, va_list p)
-{
-	int err = errno;
-	if (s == 0)
-		s = "";
-	verror_msg(s, p);
-	if (*s)
-		s = ": ";
-	fprintf(stderr, "%s%s\n", s, strerror(err));
-}
+#define perror_msg_and_die error_msg_and_die
 
-static void
-perror_msg_and_die(const char *s, ...)
+char *
+get_genext2fs_error ()
 {
-	va_list p;
-	va_start(p, s);
-	vperror_msg(s, p);
-	va_end(p);
-	exit(EXIT_FAILURE);
+	return genext2fs_error;
 }
 
 static FILE *

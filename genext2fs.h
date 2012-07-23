@@ -49,3 +49,6 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 // link an entry (inode #) to a directory
 void
 add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name);
+
+// return last error string
+char * get_genext2fs_error(void);

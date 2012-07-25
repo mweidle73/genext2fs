@@ -23,7 +23,7 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 
 void free_fs(filesystem *fs);
 
-void finish_fs(filesystem *fs);
+int finish_fs(filesystem *fs);
 
 // find an entry in a directory
 uint32
@@ -47,7 +47,7 @@ uint32
 mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE *f, uid_t uid, gid_t gid, uint32 ctime, uint32 mtime);
 
 // link an entry (inode #) to a directory
-void
+int
 add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name);
 
 // return last error string

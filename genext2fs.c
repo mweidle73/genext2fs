@@ -148,6 +148,7 @@
 # include <limits.h>
 #endif
 
+#include "genext2fs.h"
 #include "cache.h"
 
 struct stats {
@@ -310,16 +311,6 @@ static int blocksize = 1024;
 //Given a block number find its offset within the block bitmap that covers it
 #define GRP_BBM_OFFSET(fs,blk) \
 	( (blk) - GRP_GROUP_OF_BLOCK((fs),(blk))*(fs)->sb->s_blocks_per_group )
-
-
-// used types
-
-typedef signed char int8;
-typedef unsigned char uint8;
-typedef signed short int16;
-typedef unsigned short uint16;
-typedef signed int int32;
-typedef unsigned int uint32;
 
 
 // the GNU C library has a wonderful scanf("%as", string) which will
@@ -654,7 +645,7 @@ struct hdlinks_s
 };
 
 /* Filesystem structure that support groups */
-typedef struct
+struct filesystem
 {
 	FILE *f;
 	superblock *sb;
@@ -668,7 +659,7 @@ typedef struct
 	listcache gds;
 	listcache inodes;
 	listcache blkmaps;
-} filesystem;
+};
 
 // now the endianness swap
 
@@ -1864,7 +1855,7 @@ extend_inode_blk(filesystem *fs, inode_pos *ipos, block b, int amount)
 }
 
 // link an entry (inode #) to a directory
-static void
+void
 add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name)
 {
 	blockwalker bw, lbw;
@@ -1938,7 +1929,7 @@ out:
 }
 
 // find an entry in a directory
-static uint32
+uint32
 find_dir(filesystem *fs, uint32 nod, const char * name)
 {
 	blockwalker bw;
@@ -1999,7 +1990,7 @@ chmod_fs(filesystem *fs, uint32 nod, uint16 mode, uint16 uid, uint16 gid)
 }
 
 // create a simple inode
-static uint32
+uint32
 mknod_fs(filesystem *fs, uint32 parent_nod, const char *name, uint16 mode, uint16 uid, uint16 gid, uint8 major, uint8 minor, uint32 ctime, uint32 mtime)
 {
 	uint32 nod;
@@ -2038,7 +2029,7 @@ mknod_fs(filesystem *fs, uint32 parent_nod, const char *name, uint16 mode, uint1
 }
 
 // make a full-fledged directory (i.e. with "." & "..")
-static inline uint32
+inline uint32
 mkdir_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode,
 	uid_t uid, gid_t gid, uint32 ctime, uint32 mtime)
 {
@@ -2046,7 +2037,7 @@ mkdir_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode,
 }
 
 // make a symlink
-static uint32
+uint32
 mklink_fs(filesystem *fs, uint32 parent_nod, const char *name, size_t size, uint8 *b, uid_t uid, gid_t gid, uint32 ctime, uint32 mtime)
 {
 	uint32 nod = mknod_fs(fs, parent_nod, name, FM_IFLNK | FM_IRWXU | FM_IRWXG | FM_IRWXO, uid, gid, 0, 0, ctime, mtime);
@@ -2082,7 +2073,7 @@ fs_upgrade_rev1_largefile(filesystem *fs)
 #define CB_SIZE (COPY_BLOCKS * BLOCKSIZE)
 
 // make a file from a FILE*
-static uint32
+uint32
 mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE *f, uid_t uid, gid_t gid, uint32 ctime, uint32 mtime)
 {
 	uint8 * b;
@@ -2531,7 +2522,7 @@ set_file_size(filesystem *fs)
 }
 
 // initialize an empty filesystem
-static filesystem *
+filesystem *
 init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 	uint32 fs_timestamp, uint32 creator_os, int swapit, char *fname)
 {
@@ -2771,7 +2762,7 @@ load_fs(FILE *fh, int swapit, char *fname)
 	return fs;
 }
 
-static void
+void
 free_fs(filesystem *fs)
 {
 	free(fs->hdlinks.hdl);
@@ -3068,7 +3059,7 @@ print_fs(filesystem *fs)
 	}
 }
 
-static void
+void
 finish_fs(filesystem *fs)
 {
 	if (cache_flush(&fs->inodes))

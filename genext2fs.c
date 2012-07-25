@@ -772,6 +772,7 @@ char genext2fs_error[256];
 #define error_msg_and_die(fmt,...) 							\
 { 											\
 	snprintf (genext2fs_error, sizeof (genext2fs_error), fmt, ##__VA_ARGS__);	\
+	return 0;									\
 };
 
 #define perror_msg_and_die error_msg_and_die
@@ -954,7 +955,7 @@ out:
 }
 
 // return a given inode from a filesystem
-static inline void
+static inline int
 put_blk(blk_info *bi)
 {
 	if (bi->usecount == 0)
@@ -963,6 +964,8 @@ put_blk(blk_info *bi)
 	if (bi->usecount == 0)
 		/* Free happens in the cache code */
 		cache_item_set_unused(&bi->fs->blks, &bi->link);
+
+	return 1;
 }
 
 typedef struct
@@ -1032,7 +1035,7 @@ get_gd(filesystem *fs, uint32 no, gd_info **rgi)
 	return gi->gd;
 }
 
-static inline void
+static inline int
 put_gd(gd_info *gi)
 {
 	if (gi->usecount == 0)
@@ -1042,6 +1045,8 @@ put_gd(gd_info *gi)
 	if (gi->usecount == 0)
 		/* Free happens in the cache code */
 		cache_item_set_unused(&gi->fs->gds, &gi->link);
+
+	return 1;
 }
 
 // Used by get_blkmap/put_blkmap to hold information about an block map
@@ -1108,7 +1113,7 @@ get_blkmap(filesystem *fs, uint32 blk, blkmap_info **rbmi)
 	return (uint32 *) bmi->b;
 }
 
-static inline void
+static inline int
 put_blkmap(blkmap_info *bmi)
 {
 	if (bmi->usecount == 0)
@@ -1118,6 +1123,8 @@ put_blkmap(blkmap_info *bmi)
 	if (bmi->usecount == 0)
 		/* Free happens in the cache code */
 		cache_item_set_unused(&bmi->fs->blkmaps, &bmi->link);
+
+	return 1;
 }
 
 // Used by get_nod/put_nod to hold information about an inode owned
@@ -1186,6 +1193,8 @@ get_nod(filesystem *fs, uint32 nod, nod_info **rni)
 	offset %= INODES_PER_BLOCK;
 	grp = GRP_GROUP_OF_INODE(fs,nod);
 	gd = get_gd(fs, grp, &gi);
+	if (gd == NULL) return 0;
+
 	ni->b = get_blk(fs, gd->bg_inode_table + boffset, &ni->bi);
 	ni->itab = ((inode *) ni->b) + offset;
 	if (fs->swapit)
@@ -1196,7 +1205,7 @@ get_nod(filesystem *fs, uint32 nod, nod_info **rni)
 	return ni->itab;
 }
 
-static inline void
+static inline int
 put_nod(nod_info *ni)
 {
 	if (ni->usecount == 0)
@@ -1206,6 +1215,8 @@ put_nod(nod_info *ni)
 	if (ni->usecount == 0)
 		/* Free happens in the cache code */
 		cache_item_set_unused(&ni->fs->inodes, &ni->link);
+
+	return 1;
 }
 
 // Used to hold state information while walking a directory inode.
@@ -1380,19 +1391,25 @@ alloc_blk(filesystem *fs, uint32 nod)
 	blk_info *bi;
 	groupdescriptor *gd;
 	gd_info *gi;
+	uint8 *bbm;
 
 	grp = GRP_GROUP_OF_INODE(fs,nod);
 	nbgroups = GRP_NBGROUPS(fs);
 	gd = get_gd(fs, grp, &gi);
-	bk = allocate(GRP_GET_GROUP_BBM(fs, gd, &bi), 0);
+	if (gd == NULL) return 0;
+
+	bbm = GRP_GET_GROUP_BBM(fs, gd, &bi);
+	if (bbm == NULL) return 0;
+
+	bk = allocate(bbm, 0);
 	GRP_PUT_GROUP_BBM(bi);
-	put_gd(gi);
+	if (!put_gd(gi)) return 0;
 	if (!bk) {
 		for (grp=0; grp<nbgroups && !bk; grp++) {
 			gd = get_gd(fs, grp, &gi);
 			bk = allocate(GRP_GET_GROUP_BBM(fs, gd, &bi), 0);
 			GRP_PUT_GROUP_BBM(bi);
-			put_gd(gi);
+			if (!put_gd(gi)) return 0;
 		}
 		grp--;
 	}
@@ -1401,29 +1418,37 @@ alloc_blk(filesystem *fs, uint32 nod)
 	gd = get_gd(fs, grp, &gi);
 	if(!(gd->bg_free_blocks_count--))
 		error_msg_and_die("group descr %d. free blocks count == 0 (corrupted fs?)",grp);
-	put_gd(gi);
+	if (!put_gd(gi)) return 0;
 	if(!(fs->sb->s_free_blocks_count--))
 		error_msg_and_die("superblock free blocks count == 0 (corrupted fs?)");
 	return fs->sb->s_first_data_block + fs->sb->s_blocks_per_group*grp + (bk-1);
 }
 
 // free a block
-static void
+static int
 free_blk(filesystem *fs, uint32 bk)
 {
 	uint32 grp;
 	blk_info *bi;
 	gd_info *gi;
 	groupdescriptor *gd;
+	uint8 *bbm;
 
 	grp = bk / fs->sb->s_blocks_per_group;
 	bk %= fs->sb->s_blocks_per_group;
 	gd = get_gd(fs, grp, &gi);
-	deallocate(GRP_GET_GROUP_BBM(fs, gd, &bi), bk);
+	if (gd == NULL) return 0;
+
+	bbm = GRP_GET_GROUP_BBM(fs, gd, &bi);
+	if (bbm == NULL) return 0;
+
+	deallocate(bbm, bk);
 	GRP_PUT_GROUP_BBM(bi);
 	gd->bg_free_blocks_count++;
 	put_gd(gi);
 	fs->sb->s_free_blocks_count++;
+
+	return 1;
 }
 
 // allocate an inode
@@ -1445,27 +1470,31 @@ alloc_nod(filesystem *fs)
 	/* We do it for all inodes.                                           */
 	avefreei  =  fs->sb->s_free_inodes_count / nbgroups;
 	bestgd = get_gd(fs, best_group, &bestgi);
+	if (bestgd == NULL) return 0;
+
 	for(grp=0; grp<nbgroups; grp++) {
 		gd = get_gd(fs, grp, &gi);
+		if (gd == NULL) return 0;
+
 		if (gd->bg_free_inodes_count < avefreei ||
 		    gd->bg_free_inodes_count == 0) {
-			put_gd(gi);
+			if (!put_gd(gi)) return 0;
 			continue;
 		}
 		if (!best_group || gd->bg_free_blocks_count > bestgd->bg_free_blocks_count) {
-			put_gd(bestgi);
+			if (!put_gd(bestgi)) return 0;
 			best_group = grp;
 			bestgd = gd;
 			bestgi = gi;
 		} else
-			put_gd(gi);
+			if (!put_gd(gi)) return 0;
 	}
 	if (!(nod = allocate(GRP_GET_GROUP_IBM(fs, bestgd, &bi), 0)))
 		error_msg_and_die("couldn't allocate an inode (no free inode)");
 	GRP_PUT_GROUP_IBM(bi);
 	if(!(bestgd->bg_free_inodes_count--))
 		error_msg_and_die("group descr. free blocks count == 0 (corrupted fs?)");
-	put_gd(bestgi);
+	if (!put_gd(bestgi)) return 0;
 	if(!(fs->sb->s_free_inodes_count--))
 		error_msg_and_die("superblock free blocks count == 0 (corrupted fs?)");
 	return fs->sb->s_inodes_per_group*best_group+nod;
@@ -1517,6 +1546,8 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 	if(create && (*create) < 0)
 		reduce = 1;
 	inod = get_nod(fs, nod, &ni);
+	if (inod == NULL) return 0;
+
 	if(bw->bnum >= inod->i_blocks / INOBLK)
 	{
 		if(create && (*create) > 0)
@@ -1526,7 +1557,7 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		}
 		else
 		{
-			put_nod(ni);
+			if (!put_nod(ni)) return 0;
 			return WALK_END;
 		}
 	}
@@ -1536,7 +1567,17 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 	{
 		bkref = &iblk[bw->bpdir = 0];
 		if(extend) // allocate first block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1545,7 +1586,17 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 	{
 		bkref = &iblk[++bw->bpdir];
 		if(extend) // allocate block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free block
 			free_blk(fs, *bkref);
 	}
@@ -1556,13 +1607,26 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		bw->bpdir = EXT2_IND_BLOCK;
 		bw->bpind = 0;
 		if(extend) // allocate indirect block
+		{
 			iblk[bw->bpdir] = alloc_blk(fs,nod);
+			if (!iblk[bw->bpdir]) return 0;
+		}
 		if(reduce) // free indirect block
 			free_blk(fs, iblk[bw->bpdir]);
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		bkref = &b[bw->bpind];
 		if(extend) // allocate first block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1573,7 +1637,17 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		bkref = &b[bw->bpind];
 		if(extend) // allocate block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free block
 			free_blk(fs, *bkref);
 	}
@@ -1585,18 +1659,34 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		bw->bpind = 0;
 		bw->bpdind = 0;
 		if(extend) // allocate double indirect block
+		{
 			iblk[bw->bpdir] = alloc_blk(fs,nod);
+			if (!iblk[bw->bpdir]) return 0;
+		}
 		if(reduce) // free double indirect block
 			free_blk(fs, iblk[bw->bpdir]);
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		if(extend) // allocate first indirect block
+		{
 			b[bw->bpind] = alloc_blk(fs,nod);
+			if (!b[bw->bpind]) return 0;
+		}
 		if(reduce) // free  firstindirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpind], &bmi2);
 		bkref = &b[bw->bpdind];
 		if(extend) // allocate first block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1608,7 +1698,17 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		b = get_blkmap(fs, b[bw->bpind], &bmi2);
 		bkref = &b[bw->bpdind];
 		if(extend) // allocate block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free block
 			free_blk(fs, *bkref);
 	}
@@ -1620,13 +1720,26 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		bw->bpind++;
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		if(extend) // allocate indirect block
+		{
 			b[bw->bpind] = alloc_blk(fs,nod);
+			if (!b[bw->bpind]) return 0;
+		}
 		if(reduce) // free indirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpind], &bmi2);
 		bkref = &b[bw->bpdind];
 		if(extend) // allocate first block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1643,23 +1756,42 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		bw->bpdind = 0;
 		bw->bptind = 0;
 		if(extend) // allocate triple indirect block
+		{
 			iblk[bw->bpdir] = alloc_blk(fs,nod);
+			if (!iblk[bw->bpdir]) return 0;
+		}
 		if(reduce) // free triple indirect block
 			free_blk(fs, iblk[bw->bpdir]);
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		if(extend) // allocate first double indirect block
+		{
 			b[bw->bpind] = alloc_blk(fs,nod);
+			if (!b[bw->bpind]) return 0;
+		}
 		if(reduce) // free first double indirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpind], &bmi2);
 		if(extend) // allocate first indirect block
+		{
 			b[bw->bpdind] = alloc_blk(fs,nod);
+			if (!b[bw->bpdind]) return 0;
+		}
 		if(reduce) // free first indirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpdind], &bmi3);
 		bkref = &b[bw->bptind];
 		if(extend) // allocate first data block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1675,7 +1807,17 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		b = get_blkmap(fs, b[bw->bpdind], &bmi3);
 		bkref = &b[bw->bptind];
 		if(extend) // allocate data block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free block
 			free_blk(fs, *bkref);
 	}
@@ -1692,13 +1834,26 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		b = get_blkmap(fs, b[bw->bpind], &bmi2);
 		if(extend) // allocate single indirect block
+		{
 			b[bw->bpdind] = alloc_blk(fs,nod);
+			if (!b[bw->bpdind]) return 0;
+		}
 		if(reduce) // free indirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpdind], &bmi3);
 		bkref = &b[bw->bptind];
 		if(extend) // allocate first data block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1714,18 +1869,34 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		bw->bpind++;
 		b = get_blkmap(fs, iblk[bw->bpdir], &bmi1);
 		if(extend) // allocate double indirect block
+		{
 			b[bw->bpind] = alloc_blk(fs,nod);
+			if (!b[bw->bpind]) return 0;
+		}
 		if(reduce) // free double indirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpind], &bmi2);
 		if(extend) // allocate single indirect block
+		{
 			b[bw->bpdind] = alloc_blk(fs,nod);
+			if (!b[bw->bpdind]) return 0;
+		}
 		if(reduce) // free indirect block
 			free_blk(fs, b[bw->bpind]);
 		b = get_blkmap(fs, b[bw->bpdind], &bmi3);
 		bkref = &b[bw->bptind];
 		if(extend) // allocate first block
-			*bkref = hole ? 0 : alloc_blk(fs,nod);
+		{
+			if (hole)
+			{
+				*bkref = 0;
+			}
+			else
+			{
+				*bkref = alloc_blk(fs,nod);
+				if (*bkref == 0) return 0;
+			}
+		}
 		if(reduce) // free first block
 			free_blk(fs, *bkref);
 	}
@@ -1735,11 +1906,11 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 
 	bk = *bkref;
 	if (bmi3)
-		put_blkmap(bmi3);
+		if (!put_blkmap(bmi3)) return 0;
 	if (bmi2)
-		put_blkmap(bmi2);
+		if (!put_blkmap(bmi2)) return 0;
 	if (bmi1)
-		put_blkmap(bmi1);
+		if (!put_blkmap(bmi1)) return 0;
 
 	if(bk)
 	{
@@ -1748,13 +1919,14 @@ walk_bw(filesystem *fs, uint32 nod, blockwalker *bw, int32 *create, uint32 hole)
 		uint8 *block;
 		bw->bnum++;
 		block = GRP_GET_BLOCK_BITMAP(fs,bk,&bi,&gi);
+		if (block == NULL) return 0;
 		if(!reduce && !allocated(block, GRP_BBM_OFFSET(fs,bk)))
 			error_msg_and_die("[block %d of inode %d is unallocated !]", bk, nod);
 		GRP_PUT_BLOCK_BITMAP(bi, gi);
 	}
 	if(extend)
 		inod->i_blocks = bw->bnum * INOBLK;
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
 	return bk;
 }
 
@@ -1811,7 +1983,7 @@ inode_pos_finish(filesystem *fs, inode_pos *ipos)
 
 // add blocks to an inode (file/dir/etc...) at the given position.
 // This will only work when appending to the end of an inode.
-static void
+static int
 extend_inode_blk(filesystem *fs, inode_pos *ipos, block b, int amount)
 {
 	uint32 bk;
@@ -1825,19 +1997,23 @@ extend_inode_blk(filesystem *fs, inode_pos *ipos, block b, int amount)
 		int hole = (fs->holes && is_blk_empty(b + pos));
 
 		bk = walk_bw(fs, ipos->nod, &ipos->bw, &amount, hole);
+		if (!bk) return 0;
 		if (bk == WALK_END)
 			error_msg_and_die("extend_inode_blk: extend failed");
 		if (!hole) {
 			blk_info *bi;
 			uint8 *block = get_blk(fs, bk, &bi);
+			if (block == NULL) return 0;
 			memcpy(block, b + pos, BLOCKSIZE);
-			put_blk(bi);
+			if (!put_blk(bi)) return 0;
 		}
 	}
+
+	return 1;
 }
 
 // link an entry (inode #) to a directory
-void
+int
 add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name)
 {
 	blockwalker bw, lbw;
@@ -1851,6 +2027,8 @@ add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name)
 	inode_pos ipos;
 
 	pnode = get_nod(fs, dnod, &dni);
+	if (pnode == NULL) return 0;
+
 	if((pnode->i_mode & FM_IFMT) != FM_IFDIR)
 		error_msg_and_die("can't add '%s' to a non-directory", name);
 	if(!*name)
@@ -1876,7 +2054,7 @@ add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name)
 				dir_set_name(&dw, name, nlen);
 				put_dir(&dw);
 				node->i_links_count++;
-				put_nod(ni);
+				if (!put_nod(ni)) return 0;
 				goto out;
 			}
 			// if entry with enough room (last one?), shrink it & use it
@@ -1886,7 +2064,7 @@ add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name)
 				put_dir(&dw);
 				node = get_nod(fs, nod, &ni);
 				node->i_links_count++;
-				put_nod(ni);
+				if (!put_nod(ni)) return 0;
 				goto out;
 			}
 		}
@@ -1897,17 +2075,19 @@ add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name)
 	node = get_nod(fs, nod, &ni);
 	d = new_dir(fs, nod, name, nlen, &dw);
 	node->i_links_count++;
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
 	next_dir(&dw); // Force the data into the buffer
 
 	inode_pos_init(fs, &ipos, dnod, INODE_POS_EXTEND, &lbw);
-	extend_inode_blk(fs, &ipos, dir_data(&dw), 1);
+	if (!extend_inode_blk(fs, &ipos, dir_data(&dw), 1)) return 0;
 	inode_pos_finish(fs, &ipos);
 
 	put_dir(&dw);
 	pnode->i_size += BLOCKSIZE;
 out:
-	put_nod(dni);
+	if (!put_nod(dni)) return 0;
+
+	return 1;
 }
 
 // find an entry in a directory
@@ -1959,16 +2139,20 @@ find_path(filesystem *fs, uint32 nod, const char * name)
 }
 
 // chmod an inode
-void
+int
 chmod_fs(filesystem *fs, uint32 nod, uint16 mode, uint16 uid, uint16 gid)
 {
 	inode *node;
 	nod_info *ni;
 	node = get_nod(fs, nod, &ni);
+	if (node == NULL) return 0;
+
 	node->i_mode = (node->i_mode & ~FM_IMASK) | (mode & FM_IMASK);
 	node->i_uid = uid;
 	node->i_gid = gid;
 	put_nod(ni);
+
+	return 1;
 }
 
 // create a simple inode
@@ -1982,8 +2166,11 @@ mknod_fs(filesystem *fs, uint32 parent_nod, const char *name, uint16 mode, uint1
 
 	nod = alloc_nod(fs);
 	node = get_nod(fs, nod, &ni);
+	if (node == NULL) return 0;
+
 	node->i_mode = mode;
-	add2dir(fs, parent_nod, nod, name);
+	if (!add2dir(fs, parent_nod, nod, name)) return 0;
+
 	switch(mode & FM_IFMT)
 	{
 	case FM_IFLNK:
@@ -1995,10 +2182,10 @@ mknod_fs(filesystem *fs, uint32 parent_nod, const char *name, uint16 mode, uint1
 		((uint8*)node->i_block)[1] = major;
 		break;
 	case FM_IFDIR:
-		add2dir(fs, nod, nod, ".");
-		add2dir(fs, nod, parent_nod, "..");
+		if (!add2dir(fs, nod, nod, ".")) return 0;
+		if (!add2dir(fs, nod, parent_nod, "..")) return 0;
 		get_gd(fs,GRP_GROUP_OF_INODE(fs,nod),&gi)->bg_used_dirs_count++;
-		put_gd(gi);
+		if (!put_gd(gi)) return 0;
 		break;
 	}
 	node->i_uid = uid;
@@ -2006,7 +2193,7 @@ mknod_fs(filesystem *fs, uint32 parent_nod, const char *name, uint16 mode, uint1
 	node->i_atime = mtime;
 	node->i_ctime = ctime;
 	node->i_mtime = mtime;
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
 	return nod;
 }
 
@@ -2023,8 +2210,12 @@ uint32
 mklink_fs(filesystem *fs, uint32 parent_nod, const char *name, size_t size, uint8 *b, uid_t uid, gid_t gid, uint32 ctime, uint32 mtime)
 {
 	uint32 nod = mknod_fs(fs, parent_nod, name, FM_IFLNK | FM_IRWXU | FM_IRWXG | FM_IRWXO, uid, gid, 0, 0, ctime, mtime);
+	if (!nod) return 0;
 	nod_info *ni;
+
 	inode *node = get_nod(fs, nod, &ni);
+	if (node == NULL) return 0;
+
 	inode_pos ipos;
 
 	inode_pos_init(fs, &ipos, nod, INODE_POS_TRUNCATE, NULL);
@@ -2034,12 +2225,12 @@ mklink_fs(filesystem *fs, uint32 parent_nod, const char *name, size_t size, uint
 		strncpy((char*)node->i_block, (char*)b, size);
 		((char*)node->i_block)[size+1] = '\0';
 		inode_pos_finish(fs, &ipos);
-		put_nod(ni);
+		if (!put_nod(ni)) return 0;
 		return nod;
 	}
-	extend_inode_blk(fs, &ipos, b, rndup(size, BLOCKSIZE) / BLOCKSIZE);
+	if (!extend_inode_blk(fs, &ipos, b, rndup(size, BLOCKSIZE) / BLOCKSIZE)) return 0;
 	inode_pos_finish(fs, &ipos);
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
 	return nod;
 }
 
@@ -2060,8 +2251,12 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 {
 	uint8 * b;
 	uint32 nod = mknod_fs(fs, parent_nod, name, mode|FM_IFREG, uid, gid, 0, 0, ctime, mtime);
+	if (!nod) return 0;
+
 	nod_info *ni;
 	inode *node = get_nod(fs, nod, &ni);
+	if (node == NULL) return 0;
+
 	off_t size = 0;
 	size_t readbytes;
 	inode_pos ipos;
@@ -2076,7 +2271,7 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 		fullsize = rndup(readbytes, BLOCKSIZE);
 		// Fill to end of block with zeros.
 		memset(b + readbytes, 0, fullsize - readbytes);
-		extend_inode_blk(fs, &ipos, b, fullsize / BLOCKSIZE);
+		if (!extend_inode_blk(fs, &ipos, b, fullsize / BLOCKSIZE)) return 0;
 		size += readbytes;
 		readbytes = fread(b, 1, CB_SIZE, f);
 	}
@@ -2088,7 +2283,7 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 	node->i_dir_acl = size >> 32;
 	node->i_size = size;
 	inode_pos_finish(fs, &ipos);
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
 	free(b);
 	return nod;
 }
@@ -2270,7 +2465,7 @@ add2fs_from_file(filesystem *fs, uint32 this_nod, FILE * fh, uint32 fs_timestamp
 }
 
 // adds a tree of entries to the filesystem from current dir
-static void
+static int
 add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_perms, uint32 fs_timestamp, struct stats *stats)
 {
 	uint32 nod;
@@ -2321,7 +2516,8 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 					stats->ninodes++;
 					if(chdir(dent->d_name) < 0)
 						perror_msg_and_die(dent->d_name);
-					add2fs_from_dir(fs, this_nod, squash_uids, squash_perms, fs_timestamp, stats);
+					if (!add2fs_from_dir(fs, this_nod, squash_uids, squash_perms, fs_timestamp, stats))
+						return 0;
 					if (chdir("..") == -1)
 						perror_msg_and_die("..");
 
@@ -2337,7 +2533,8 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 				if(S_ISDIR(st.st_mode)) {
 					if(chdir(dent->d_name) < 0)
 						perror_msg_and_die(name);
-					add2fs_from_dir(fs, nod, squash_uids, squash_perms, fs_timestamp, stats);
+					if (!add2fs_from_dir(fs, nod, squash_uids, squash_perms, fs_timestamp, stats))
+						return 0;
 					if (chdir("..") == -1)
 						perror_msg_and_die("..");
 				}
@@ -2348,7 +2545,7 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 			if (!S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) && st.st_nlink > 1) {
 				int32 hdlink = is_hardlink(fs, st.st_ino);
 				if (hdlink >= 0) {
-					add2dir(fs, this_nod, fs->hdlinks.hdl[hdlink].dst_nod, name);
+					if (!add2dir(fs, this_nod, fs->hdlinks.hdl[hdlink].dst_nod, name)) return 0;
 					continue;
 				} else {
 					save_nod = 1;
@@ -2359,6 +2556,7 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 #if HAVE_STRUCT_STAT_ST_RDEV
 				case S_IFCHR:
 					nod = mknod_fs(fs, this_nod, name, mode|FM_IFCHR, uid, gid, major(st.st_rdev), minor(st.st_rdev), ctime, mtime);
+					if (!nod) return 0;
 					break;
 				case S_IFBLK:
 					nod = mknod_fs(fs, this_nod, name, mode|FM_IFBLK, uid, gid, major(st.st_rdev), minor(st.st_rdev), ctime, mtime);
@@ -2366,9 +2564,11 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 #endif
 				case S_IFIFO:
 					nod = mknod_fs(fs, this_nod, name, mode|FM_IFIFO, uid, gid, 0, 0, ctime, mtime);
+					if (!nod) return 0;
 					break;
 				case S_IFSOCK:
 					nod = mknod_fs(fs, this_nod, name, mode|FM_IFSOCK, uid, gid, 0, 0, ctime, mtime);
+					if (!nod) return 0;
 					break;
 				case S_IFLNK:
 					lnk = xreadlink(dent->d_name);
@@ -2388,7 +2588,8 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 					nod = mkdir_fs(fs, this_nod, name, mode, uid, gid, ctime, mtime);
 					if(chdir(dent->d_name) < 0)
 						perror_msg_and_die(name);
-					add2fs_from_dir(fs, nod, squash_uids, squash_perms, fs_timestamp, stats);
+					if (!add2fs_from_dir(fs, nod, squash_uids, squash_perms, fs_timestamp, stats))
+						return 0;
 					if (chdir("..") == -1)
 						perror_msg_and_die("..");
 					break;
@@ -2411,13 +2612,15 @@ add2fs_from_dir(filesystem *fs, uint32 this_nod, int squash_uids, int squash_per
 		}
 	}
 	closedir(dh);
+
+	return 1;
 }
 
 // Copy size blocks from src to dst, putting holes in the output
 // file (if possible) if the input block is all zeros.
 // Copy size blocks from src to dst, putting holes in the output
 // file (if possible) if the input block is all zeros.
-static void
+static int
 copy_file(filesystem *fs, FILE *dst, FILE *src, size_t size)
 {
 	uint8 *b;
@@ -2443,6 +2646,8 @@ copy_file(filesystem *fs, FILE *dst, FILE *src, size_t size)
 		size--;
 	}
 	free(b);
+
+	return 1;
 }
 
 // Allocate a new filesystem structure, allocate internal memory,
@@ -2495,12 +2700,14 @@ alloc_fs(int swapit, char *fname, uint32 nbblocks, FILE *srcfile)
 }
 
 /* Make sure the output file is the right size */
-static void
+static int
 set_file_size(filesystem *fs)
 {
 	if (ftruncate(fileno(fs->f),
 		      ((off_t) fs->sb->s_blocks_count) * BLOCKSIZE))
 		perror_msg_and_die("set_file_size: ftruncate");
+
+	return 1;
 }
 
 // initialize an empty filesystem
@@ -2582,7 +2789,7 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 	fs->sb->s_lastcheck = fs_timestamp;
 	fs->sb->s_creator_os = creator_os;
 
-	set_file_size(fs);
+	if (!set_file_size(fs)) return NULL;
 
 	// set up groupdescriptors
 	for(i=0, bbmpos=first_block+1+gdsz, ibmpos=bbmpos+1, itblpos=ibmpos+1;
@@ -2590,6 +2797,7 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 		i++, bbmpos+=nbblocks_per_group, ibmpos+=nbblocks_per_group, itblpos+=nbblocks_per_group)
 	{
 		gd = get_gd(fs, i, &gi);
+		if (gd == NULL) return 0;
 
 		if(free_blocks > free_blocks_per_group) {
 			gd->bg_free_blocks_count = free_blocks_per_group;
@@ -2607,7 +2815,7 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 		gd->bg_block_bitmap = bbmpos;
 		gd->bg_inode_bitmap = ibmpos;
 		gd->bg_inode_table = itblpos;
-		put_gd(gi);
+		if (!put_gd(gi)) return NULL;
 	}
 
 	/* Mark non-filesystem blocks and inodes as allocated */
@@ -2615,7 +2823,9 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 	for(i = 0; i<nbgroups;i++) {
 		/* Block bitmap */
 		gd = get_gd(fs, i, &gi);
+		if (gd == NULL) return 0;
 		bbm = GRP_GET_GROUP_BBM(fs, gd, &bi);
+		if (bbm == NULL) return 0;
 		//non-filesystem blocks
 		for(j = gd->bg_free_blocks_count
 		        + overhead_per_group + 1; j <= BLOCKSIZE * 8; j++)
@@ -2636,7 +2846,7 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 			for(j = 1; j < EXT2_FIRST_INO; j++)
 				allocate(ibm, j);
 		GRP_PUT_GROUP_IBM(bi);
-		put_gd(gi);
+		if (!put_gd(gi)) return NULL;
 	}
 
 	// make root inode and directory
@@ -2645,7 +2855,7 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 	gd = get_gd(fs, 0, &gi);
 	gd->bg_free_inodes_count--;
 	gd->bg_used_dirs_count = 1;
-	put_gd(gi);
+	if (!put_gd(gi)) return NULL;
 	itab0 = get_nod(fs, EXT2_ROOT_INO, &ni);
 	itab0->i_mode = FM_IFDIR | FM_IRWXU | FM_IRGRP | FM_IROTH | FM_IXGRP | FM_IXOTH;
 	itab0->i_ctime = fs_timestamp;
@@ -2653,13 +2863,13 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 	itab0->i_atime = fs_timestamp;
 	itab0->i_size = BLOCKSIZE;
 	itab0->i_links_count = 2;
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
 
 	new_dir(fs, EXT2_ROOT_INO, ".", 1, &dw);
 	shrink_dir(&dw, EXT2_ROOT_INO, "..", 2);
 	next_dir(&dw); // Force the data into the buffer
 	inode_pos_init(fs, &ipos, EXT2_ROOT_INO, INODE_POS_EXTEND, NULL);
-	extend_inode_blk(fs, &ipos, dir_data(&dw), 1);
+	if (!extend_inode_blk(fs, &ipos, dir_data(&dw), 1)) return 0;
 	inode_pos_finish(fs, &ipos);
 	put_dir(&dw);
 
@@ -2677,12 +2887,12 @@ init_fs(int nbblocks, int nbinodes, int nbresrvd, int holes,
 		inode_pos_init(fs, &ipos, nod, INODE_POS_EXTEND, NULL);
 		// It is always 16 blocks to start out with
 		for(i = 1; i < 16; i++)
-			extend_inode_blk(fs, &ipos, b, 1);
+			if (!extend_inode_blk(fs, &ipos, b, 1)) return 0;
 		inode_pos_finish(fs, &ipos);
 		free_workblk(b);
 		node = get_nod(fs, nod, &ni);
 		node->i_size = 16 * BLOCKSIZE;
-		put_nod(ni);
+		if (!put_nod(ni)) return 0;
 	}
 
 	// administrative info
@@ -2740,7 +2950,7 @@ load_fs(FILE *fh, int swapit, char *fname)
 			error_msg_and_die("Unsupported ro compat features");
 	}
 
-	set_file_size(fs);
+	if (!set_file_size(fs)) return NULL;
 	return fs;
 }
 
@@ -2780,7 +2990,7 @@ list_blocks(filesystem *fs, uint32 nod)
 }
 
 // saves blocks to FILE*
-static void
+static int
 write_blocks(filesystem *fs, uint32 nod, FILE* f)
 {
 	blockwalker bw;
@@ -2798,10 +3008,12 @@ write_blocks(filesystem *fs, uint32 nod, FILE* f)
 		if(fwrite(get_blk(fs, bk, &bi),
 			  (fsize > BLOCKSIZE) ? BLOCKSIZE : fsize, 1, f) != 1)
 			error_msg_and_die("error while saving inode %d", nod);
-		put_blk(bi);
+		if (!put_blk(bi)) return 0;
 		fsize -= BLOCKSIZE;
 	}
-	put_nod(ni);
+	if (!put_nod(ni)) return 0;
+
+	return 1;
 }
 
 
@@ -2812,6 +3024,12 @@ print_dev(filesystem *fs, uint32 nod)
 	int minor, major;
 	nod_info *ni;
 	inode *node = get_nod(fs, nod, &ni);
+	if (node == NULL)
+	{
+		printf("print_dev: could not get node\n");
+		return;
+	}
+
 	minor = ((uint8*)node->i_block)[0];
 	major = ((uint8*)node->i_block)[1];
 	put_nod(ni);
@@ -2927,6 +3145,11 @@ print_inode(filesystem *fs, uint32 nod)
 	char perms[11];
 	nod_info *ni;
 	inode *node = get_nod(fs, nod, &ni);
+	if (node == NULL)
+	{
+		printf("print_inode: could not get node\n");
+		return;
+	}
 	blk_info *bi;
 	gd_info *gi;
 
@@ -3004,7 +3227,7 @@ print_fs(filesystem *fs)
 	blk_info *bi;
 	groupdescriptor *gd;
 	gd_info *gi;
-	uint8 *ibm;
+	uint8 *ibm, *bbm;
 
 	printf("%d blocks (%d free, %d reserved), first data block: %d\n",
 	       fs->sb->s_blocks_count, fs->sb->s_free_blocks_count,
@@ -3023,15 +3246,31 @@ print_fs(filesystem *fs)
 	for (i = 0; i < GRP_NBGROUPS(fs); i++) {
 		printf("Group No: %d\n", i+1);
 		gd = get_gd(fs, i, &gi);
+		if (gd == NULL)
+		{
+			printf("print_fs: could not get gd\n");
+			return;
+		}
 		printf("block bitmap: block %d,inode bitmap: block %d, inode table: block %d\n",
 		     gd->bg_block_bitmap,
 		     gd->bg_inode_bitmap,
 		     gd->bg_inode_table);
 		printf("block bitmap allocation:\n");
-		print_bm(GRP_GET_GROUP_BBM(fs, gd, &bi),fs->sb->s_blocks_per_group);
+		bbm = GRP_GET_GROUP_BBM(fs, gd, &bi);
+		if (bbm == NULL)
+		{
+			printf("print_fs: could not get bbm\n");
+			return;
+		}
+		print_bm(bbm,fs->sb->s_blocks_per_group);
 		GRP_PUT_GROUP_BBM(bi);
 		printf("inode bitmap allocation:\n");
 		ibm = GRP_GET_GROUP_IBM(fs, gd, &bi);
+		if (ibm == NULL)
+		{
+			printf("print_fs: could not get group ibm\n");
+			return;
+		}
 		print_bm(ibm, fs->sb->s_inodes_per_group);
 		for (i = 1; i <= fs->sb->s_inodes_per_group; i++)
 			if (allocated(ibm, i))
@@ -3041,7 +3280,7 @@ print_fs(filesystem *fs)
 	}
 }
 
-void
+int
 finish_fs(filesystem *fs)
 {
 	if (cache_flush(&fs->inodes))
@@ -3060,9 +3299,11 @@ finish_fs(filesystem *fs)
 		perror_msg_and_die("output filesystem superblock");
 	if(fs->swapit)
 		swap_sb(fs->sb);
+
+	return 1;
 }
 
-static void
+static int
 populate_fs(filesystem *fs, char **dopt, int didx, int squash_uids, int squash_perms, uint32 fs_timestamp, struct stats *stats)
 {
 	int i;
@@ -3093,7 +3334,8 @@ populate_fs(filesystem *fs, char **dopt, int didx, int squash_uids, int squash_p
 					perror_msg_and_die(".");
 				if(chdir(dopt[i]) < 0)
 					perror_msg_and_die(dopt[i]);
-				add2fs_from_dir(fs, nod, squash_uids, squash_perms, fs_timestamp, stats);
+				if (!add2fs_from_dir(fs, nod, squash_uids, squash_perms, fs_timestamp, stats))
+					return 0;
 				if(fchdir(pdir) < 0)
 					perror_msg_and_die("fchdir");
 				if(close(pdir) < 0)
@@ -3103,6 +3345,8 @@ populate_fs(filesystem *fs, char **dopt, int didx, int squash_uids, int squash_p
 				error_msg_and_die("%s is neither a file nor a directory", dopt[i]);
 		}
 	}
+
+	return 1;
 }
 
 static void

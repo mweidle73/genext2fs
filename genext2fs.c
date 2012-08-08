@@ -2234,7 +2234,7 @@ mklink_fs(filesystem *fs, uint32 parent_nod, const char *name, size_t size, uint
 	return nod;
 }
 
-static void
+void
 fs_upgrade_rev1_largefile(filesystem *fs)
 {
 	fs->sb->s_rev_level = 1;

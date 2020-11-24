@@ -2979,6 +2979,8 @@ free_fs(filesystem *fs)
 		char buf[buffer_size];
 		size_t read_size = 0;
 		size_t write_size = 0;
+		rewind(fs->f);
+		rewind(fs->out_file);
 		do {
 			read_size = fread(buf, 1, buffer_size, fs->f);
 			write_size = fwrite(buf, 1, read_size, fs->out_file);
@@ -2987,9 +2989,7 @@ free_fs(filesystem *fs)
 
 	free(fs->hdlinks.hdl);
 	fclose(fs->f);
-	if (fs->out_file != NULL) {
-		fclose(fs->out_file);
-	}
+	fclose(fs->out_file);
 	free(fs->sb);
 	free(fs);
 }
@@ -3620,12 +3620,10 @@ main(int argc, char **argv)
 			fs_timestamp = time(NULL);
 		fs = init_fs(nbblocks, nbinodes, nbresrvd, holes,
 			     fs_timestamp, creator_os, bigendian, fsout);
-		assert(fs != NULL);
 	}
 	if (volumelabel != NULL)
 		strncpy((char *)fs->sb->s_volume_name, volumelabel,
 			sizeof(fs->sb->s_volume_name));
-	assert(fs != NULL);
 	populate_fs(fs, dopt, didx, squash_uids, squash_perms, fs_timestamp, NULL);
 
 	if(emptyval) {

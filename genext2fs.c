@@ -2198,7 +2198,7 @@ mknod_fs(filesystem *fs, uint32 parent_nod, const char *name, uint16 mode, uint1
 }
 
 // make a full-fledged directory (i.e. with "." & "..")
-inline uint32
+uint32
 mkdir_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode,
 	uid_t uid, gid_t gid, uint32 ctime, uint32 mtime)
 {

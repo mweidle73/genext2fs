@@ -50,6 +50,9 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 int
 add2dir(filesystem *fs, uint32 dnod, uint32 nod, const char* name);
 
+void
+set_blocksize(uint32 blocksize_new);
+
 // upgrade filesystem to rev1
 void
 fs_upgrade_rev1_largefile(filesystem *fs);

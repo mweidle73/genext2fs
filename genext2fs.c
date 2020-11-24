@@ -160,6 +160,15 @@ struct stats {
 
 static int blocksize = 1024;
 
+void set_blocksize(uint32_t blocksize_new) {
+	assert(
+		blocksize == 1024 ||
+		blocksize == 2048 ||
+		blocksize == 4096
+	);
+	blocksize = blocksize_new;
+}
+
 #define SUPERBLOCK_OFFSET	1024
 #define SUPERBLOCK_SIZE		1024
 
@@ -648,6 +657,7 @@ struct hdlinks_s
 struct filesystem
 {
 	FILE *f;
+	FILE *out_file;
 	superblock *sb;
 	int swapit;
 	int32 hdlink_cnt;
@@ -2242,7 +2252,7 @@ fs_upgrade_rev1_largefile(filesystem *fs)
 	fs->sb->s_inode_size = EXT2_GOOD_OLD_INODE_SIZE;
 }
 
-#define COPY_BLOCKS 16
+#define COPY_BLOCKS 2048
 #define CB_SIZE (COPY_BLOCKS * BLOCKSIZE)
 
 // make a file from a FILE*
@@ -2692,8 +2702,10 @@ alloc_fs(int swapit, char *fname, uint32 nbblocks, FILE *srcfile)
 			if (fs->f)
 				copy_file(fs, fs->f, srcfile, nbblocks);
 		}
-	} else
-		fs->f = fopen(fname, "w+b");
+	} else {
+		fs->f = fmemopen(NULL, nbblocks * BLOCKSIZE, "w+b");
+		fs->out_file = fopen(fname, "w+b");
+	}
 	if (!fs->f)
 		perror_msg_and_die("opening %s", fname);
 	return fs;
@@ -2703,7 +2715,12 @@ alloc_fs(int swapit, char *fname, uint32 nbblocks, FILE *srcfile)
 static int
 set_file_size(filesystem *fs)
 {
-	if (ftruncate(fileno(fs->f),
+	FILE* f = fs->f;
+	if (fs->out_file) {
+		f = fs->out_file;
+	}
+
+	if (ftruncate(fileno(f),
 		      ((off_t) fs->sb->s_blocks_count) * BLOCKSIZE))
 		perror_msg_and_die("set_file_size: ftruncate");
 
@@ -2957,8 +2974,22 @@ load_fs(FILE *fh, int swapit, char *fname)
 void
 free_fs(filesystem *fs)
 {
+	if (fs->out_file) {
+		const size_t buffer_size = 8192;
+		char buf[buffer_size];
+		size_t read_size = 0;
+		size_t write_size = 0;
+		do {
+			read_size = fread(buf, 1, buffer_size, fs->f);
+			write_size = fwrite(buf, 1, read_size, fs->out_file);
+		} while(read_size > 0 && !ferror(fs->f) && !ferror(fs->out_file) && !feof(fs->f) && !feof(fs->out_file));
+	}
+
 	free(fs->hdlinks.hdl);
 	fclose(fs->f);
+	if (fs->out_file != NULL) {
+		fclose(fs->out_file);
+	}
 	free(fs->sb);
 	free(fs);
 }
@@ -3589,11 +3620,12 @@ main(int argc, char **argv)
 			fs_timestamp = time(NULL);
 		fs = init_fs(nbblocks, nbinodes, nbresrvd, holes,
 			     fs_timestamp, creator_os, bigendian, fsout);
+		assert(fs != NULL);
 	}
 	if (volumelabel != NULL)
 		strncpy((char *)fs->sb->s_volume_name, volumelabel,
 			sizeof(fs->sb->s_volume_name));
-	
+	assert(fs != NULL);
 	populate_fs(fs, dopt, didx, squash_uids, squash_perms, fs_timestamp, NULL);
 
 	if(emptyval) {

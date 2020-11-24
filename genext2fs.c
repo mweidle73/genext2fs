@@ -2975,7 +2975,7 @@ void
 free_fs(filesystem *fs)
 {
 	if (fs->out_file) {
-		const size_t buffer_size = 8192;
+		const size_t buffer_size = 1024 * 1024;
 		char buf[buffer_size];
 		size_t read_size = 0;
 		size_t write_size = 0;

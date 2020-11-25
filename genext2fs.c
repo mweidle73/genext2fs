@@ -1367,6 +1367,7 @@ allocate(block b, uint32 item)
 	if(!item)
 	{
 		int i;
+		uint64_t *bb = (uint64_t*) b;
 		uint64_t bits;
 		// uint8 bits;
 		for(i = 0; i < BLOCKSIZE / sizeof(bits); i++)
@@ -1381,14 +1382,14 @@ allocate(block b, uint32 item)
 				break;
 			}
 			*/
-			if((bits = b[i]) != (uint8)-1) {
-				item = i * 8 + ffsl(~bits);
+			if((bits = bb[i]) != (uint64_t)-1) {
+				item = i * 8 * sizeof(bits) + ffsl(~bits);
 				break;
 			}
 		if(i == BLOCKSIZE / sizeof(bits))
 			return 0;
 	}
-	b[(item-1) / 8] |= (1 << ((item-1) % 8));
+	b[(item-1) >> 3] |= (1 << ((item-1) & 0x7));
 	return item;
 }
 
@@ -1396,7 +1397,7 @@ allocate(block b, uint32 item)
 static void
 deallocate(block b, uint32 item)
 {
-	b[(item-1) / 8] &= ~(1 << ((item-1) % 8));
+	b[(item-1) >> 3] &= ~(1 << ((item-1) & 0x7));
 }
 
 // allocate a block

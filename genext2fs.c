@@ -1352,6 +1352,18 @@ allocate(block b, uint32 item)
 	if(!item)
 	{
 		int i;
+#ifdef __x86_64__
+		uint64_t *bb = (uint64_t*) b;
+		uint64_t bits;
+		for(i = 0; i < BLOCKSIZE / sizeof(uint64_t); i++)
+			if((bits = bb[i]) != (uint64_t)-1)
+			{
+				item = i * 8 * sizeof(uint64_t) + ffsl(~bits);
+				break;
+			}
+		if(i == BLOCKSIZE / sizeof(uint64_t))
+			return 0;
+#else
 		uint8 bits;
 		for(i = 0; i < BLOCKSIZE; i++)
 			if((bits = b[i]) != (uint8)-1)
@@ -1365,6 +1377,7 @@ allocate(block b, uint32 item)
 			}
 		if(i == BLOCKSIZE)
 			return 0;
+#endif
 	}
 	b[(item-1) / 8] |= (1 << ((item-1) % 8));
 	return item;

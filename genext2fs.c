@@ -159,6 +159,16 @@ struct stats {
 
 static thread_local int blocksize = 1024;
 
+int set_blocksize(uint32_t blocksize_new) {
+	if (blocksize_new == 1024 ||
+	    blocksize_new == 2048 ||
+	    blocksize_new == 4096) {
+		blocksize = blocksize_new;
+		return 0;
+	}
+	return 1;
+}
+
 #define SUPERBLOCK_OFFSET	1024
 #define SUPERBLOCK_SIZE		1024
 

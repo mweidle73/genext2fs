@@ -56,3 +56,7 @@ fs_upgrade_rev1_largefile(filesystem *fs);
 
 // return last error string
 char * get_genext2fs_error(void);
+
+// set thread-local blocksize, return 0 on success
+int
+set_blocksize(uint32 blocksize_new);

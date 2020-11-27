@@ -146,6 +146,10 @@
 #include "genext2fs.h"
 #include "cache.h"
 
+#if HAVE_THREADS_H
+#include <threads.h>
+#endif
+
 struct stats {
 	unsigned long nblocks;
 	unsigned long ninodes;
@@ -153,7 +157,7 @@ struct stats {
 
 // block size
 
-static int blocksize = 1024;
+static thread_local int blocksize = 1024;
 
 #define SUPERBLOCK_OFFSET	1024
 #define SUPERBLOCK_SIZE		1024

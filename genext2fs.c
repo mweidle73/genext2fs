@@ -776,7 +776,7 @@ error_msg(const char *s, ...)
 	putc('\n', stderr);
 }
 
-char genext2fs_error[256];
+thread_local char genext2fs_error[256];
 #include <stdarg.h>
 #define error_msg_and_die(fmt,...) 							\
 { 											\

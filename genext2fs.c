@@ -2283,10 +2283,14 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 		fullsize = rndup(readbytes, BLOCKSIZE);
 		// Fill to end of block with zeros.
 		memset(b + readbytes, 0, fullsize - readbytes);
-		if (!extend_inode_blk(fs, &ipos, b, fullsize / BLOCKSIZE)) return 0;
+		if (!extend_inode_blk(fs, &ipos, b, fullsize / BLOCKSIZE)) {
+			free(b);
+			return 0;
+		}
 		size += readbytes;
 		readbytes = fread(b, 1, CB_SIZE, f);
 	}
+	free(b);
 	if (size > 0x7fffffff) {
 		if (fs->sb->s_rev_level < 1)
 			fs_upgrade_rev1_largefile(fs);
@@ -2296,7 +2300,6 @@ mkfile_fs(filesystem *fs, uint32 parent_nod, const char *name, uint32 mode, FILE
 	node->i_size = size;
 	inode_pos_finish(fs, &ipos);
 	if (!put_nod(ni)) return 0;
-	free(b);
 	return nod;
 }
 

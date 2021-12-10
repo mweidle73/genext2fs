@@ -157,7 +157,7 @@ struct stats {
 
 // block size
 
-static thread_local int blocksize = 1024;
+static __thread int blocksize = 1024;
 
 int set_blocksize(uint32_t blocksize_new) {
 	if (blocksize_new == 1024 ||
@@ -776,7 +776,7 @@ error_msg(const char *s, ...)
 	putc('\n', stderr);
 }
 
-thread_local char genext2fs_error[256];
+__thread char genext2fs_error[256];
 #include <stdarg.h>
 #define error_msg_and_die(fmt,...) 							\
 { 											\

@@ -913,11 +913,16 @@ static void
 blk_freed(cache_link *elem)
 {
 	blk_info *bi = container_of(elem, blk_info, link);
+	const char *error = NULL;
 
 	if (fseeko(bi->fs->f, ((off_t) bi->blk) * BLOCKSIZE, SEEK_SET))
-		perror_msg_and_die("fseek");
-	if (fwrite(bi->b, BLOCKSIZE, 1, bi->fs->f) != 1)
-		perror_msg_and_die("get_blk: write");
+		error = "fseek";
+	else if (fwrite(bi->b, BLOCKSIZE, 1, bi->fs->f) != 1)
+		error = "get_blk: write";
+
+	if (error != NULL)
+		snprintf(genext2fs_error, sizeof(genext2fs_error), "%s", error);
+
 	free(bi->b);
 	free(bi);
 }

@@ -1,0 +1,56 @@
+name: Upstream Monitor
+
+on:
+  schedule:
+    - cron: "29 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare-upstream:
+    name: Compare authoritative upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the GitHub master mirror
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare with bestouff/genext2fs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags \
+            https://github.com/bestouff/genext2fs.git \
+            refs/heads/master:refs/remotes/upstream/master
+
+          mirror_sha=$(git rev-parse HEAD)
+          upstream_sha=$(git rev-parse refs/remotes/upstream/master)
+          read -r mirror_only upstream_only <<EOF
+          $(git rev-list --left-right --count \
+            HEAD...refs/remotes/upstream/master)
+          EOF
+
+          {
+            echo '## Authoritative upstream status'
+            echo
+            echo '| Ref | Commit |'
+            echo '| --- | --- |'
+            echo "| GitHub \`master\` | \`$mirror_sha\` |"
+            echo "| \`bestouff/genext2fs\` \`master\` | \`$upstream_sha\` |"
+            echo
+            echo "Mirror-only commits: $mirror_only"
+            echo
+            echo "Upstream-only commits: $upstream_only"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if test "$mirror_sha" != "$upstream_sha"; then
+            echo 'GitHub master differs from bestouff/genext2fs master' >&2
+            exit 1
+          fi

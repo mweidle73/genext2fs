@@ -1,0 +1,40 @@
+#!/bin/sh
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+REPOSITORY_ROOT=$(CDPATH= cd "$SCRIPT_DIR/../.." && pwd -P)
+REPORT_DIR="$REPOSITORY_ROOT/.github/coverage"
+
+cd "$REPOSITORY_ROOT"
+if test -f Makefile; then
+    make distclean
+fi
+rm -rf "$REPORT_DIR"
+rm -f ./*.gcda ./*.gcno
+
+printf '%s\n' 'coverage: configuring instrumented build'
+./autogen.sh
+./configure CFLAGS='-O0 -g --coverage' LDFLAGS='--coverage'
+
+printf '%s\n' 'coverage: compiling production code'
+make -j8
+
+printf '%s\n' 'coverage: running upstream regression tests'
+make check
+
+# Configure's C compiler probes can leave coverage metadata for short-lived
+# conftest sources. They are not production code and their sources no longer
+# exist when gcovr runs, so exclude them by removing the probe artefact.
+rm -f a-conftest.gcda a-conftest.gcno
+
+mkdir -p "$REPORT_DIR"
+printf '%s\n' 'coverage: generating source report'
+gcovr \
+    --root "$REPOSITORY_ROOT" \
+    --filter "$REPOSITORY_ROOT/genext2fs.c" \
+    --html-details "$REPORT_DIR/index.html" \
+    --xml "$REPORT_DIR/coverage.xml" \
+    --xml-pretty \
+    --print-summary > "$REPORT_DIR/summary.txt"
+cat "$REPORT_DIR/summary.txt"

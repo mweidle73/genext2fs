@@ -1,0 +1,84 @@
+#!/bin/sh
+
+set -eu
+
+step()
+{
+    printf '\n==== %s ====\n' "$1"
+}
+
+clean_generated_build()
+{
+    if test -f Makefile; then
+        make distclean >/dev/null 2>&1 || true
+    fi
+    rm -rf .deps autom4te.cache
+    rm -f Makefile.in aclocal.m4 compile config.h.in configure depcomp \
+        install-sh missing stamp-h1 test-driver test-suite.log test.sh.log \
+        test.sh.trs a-conftest.gcno genext2fs.gcda genext2fs.gcno
+}
+
+trap clean_generated_build EXIT HUP INT TERM
+
+check_image()
+{
+    image=$1
+    expected=$2
+    actual=$(mktemp)
+
+    e2fsck -fn "$image"
+    debugfs -R 'cat /etc/payload' "$image" > "$actual" 2>/dev/null
+    cmp "$expected" "$actual"
+    rm -f "$actual"
+}
+
+check_embedding_api()
+{
+    work_dir=$(mktemp -d)
+    trap 'rm -rf "$work_dir"; clean_generated_build' EXIT HUP INT TERM
+
+    cc -W -Wall -Dmain=nomain -I. -c genext2fs.c \
+        -o "$work_dir/libgenext2fs.o"
+    cc -W -Wall -I. .github/ci/embedding-probe.c \
+        "$work_dir/libgenext2fs.o" -o "$work_dir/embedding-probe"
+    "$work_dir/embedding-probe" "$work_dir/embedding-probe.ext2"
+    printf '%s\n' 'genext2fs embedding probe' \
+        > "$work_dir/embedding-probe.expected"
+    check_image "$work_dir/embedding-probe.ext2" \
+        "$work_dir/embedding-probe.expected"
+
+    rm -rf "$work_dir"
+    trap clean_generated_build EXIT HUP INT TERM
+}
+
+step 'Normal build: configure'
+clean_generated_build
+./autogen.sh
+./configure
+
+step 'Normal build: compile'
+make -j8
+
+step 'Normal build: upstream regression tests'
+make check
+
+step 'Normal build: Abuild embedding API'
+check_embedding_api
+
+step 'Sanitizer build: configure'
+clean_generated_build
+./autogen.sh
+./configure \
+    CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' \
+    LDFLAGS='-fsanitize=address,undefined'
+
+step 'Sanitizer build: compile'
+make -j8
+
+step 'Sanitizer build: upstream regression tests'
+ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
+UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1' \
+    make check
+
+step 'Coverage build: tests and HTML report'
+.github/ci/coverage

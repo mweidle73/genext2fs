@@ -1,0 +1,20 @@
+#!/bin/sh
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+REPOSITORY_ROOT=$(CDPATH= cd "$SCRIPT_DIR/../.." && pwd -P)
+SITE_DIR="$REPOSITORY_ROOT/.github/site"
+
+rm -rf "$SITE_DIR"
+mkdir -p "$SITE_DIR"
+cp "$REPOSITORY_ROOT/.github/pages/index.html" "$SITE_DIR/index.html"
+cp "$REPOSITORY_ROOT/.github/pages/style.css" "$SITE_DIR/style.css"
+mandoc -T html -O style=style.css "$REPOSITORY_ROOT/genext2fs.8" \
+    > "$SITE_DIR/genext2fs.8.html"
+
+test -s "$SITE_DIR/index.html"
+test -s "$SITE_DIR/genext2fs.8.html"
+grep -Fq 'genext2fs(8)' "$SITE_DIR/index.html"
+grep -Fq 'genext2fs' "$SITE_DIR/genext2fs.8.html"
+test -z "$(find "$SITE_DIR" -type l -print -quit)"

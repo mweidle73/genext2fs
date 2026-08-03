@@ -17,6 +17,10 @@ The long-lived branches have distinct roles:
 The old and new Abuild tips deliberately have different commit identifiers but
 the same Git tree. The legacy branch must not be force-updated or deleted.
 
+The weekly upstream monitor compares both `master` and every authoritative
+`v*` release-tag ref. Missing, additional or moved release tags fail the
+workflow for manual review; the workflow never updates tags automatically.
+
 Run the complete Trixie build, upstream regression suite, Abuild embedding-API
 probe, sanitizer pass and informative source-coverage report with:
 

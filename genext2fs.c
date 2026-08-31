@@ -2239,6 +2239,8 @@ mklink_fs(filesystem *fs, uint32 parent_nod, const char *name, size_t size, uint
 	uint32 nod = mknod_fs(fs, parent_nod, name, FM_IFLNK | FM_IRWXU | FM_IRWXG | FM_IRWXO, uid, gid, 0, 0, ctime, mtime);
 	if (!nod) return 0;
 	nod_info *ni;
+	uint8 *padded;
+	size_t blocks;
 
 	inode *node = get_nod(fs, nod, &ni);
 	if (node == NULL) return 0;
@@ -2247,15 +2249,36 @@ mklink_fs(filesystem *fs, uint32 parent_nod, const char *name, size_t size, uint
 
 	inode_pos_init(fs, &ipos, nod, INODE_POS_TRUNCATE, NULL);
 	node->i_size = size;
-	if(size < 4 * (EXT2_TIND_BLOCK+1))
+	if(size < sizeof(node->i_block))
 	{
-		strncpy((char*)node->i_block, (char*)b, size);
-		((char*)node->i_block)[size+1] = '\0';
+		memset(node->i_block, 0, sizeof(node->i_block));
+		memcpy(node->i_block, b, size);
 		inode_pos_finish(fs, &ipos);
 		if (!put_nod(ni)) return 0;
 		return nod;
 	}
-	if (!extend_inode_blk(fs, &ipos, b, rndup(size, BLOCKSIZE) / BLOCKSIZE)) return 0;
+
+	if (size > SIZE_MAX - (BLOCKSIZE - 1)) {
+		inode_pos_finish(fs, &ipos);
+		return 0;
+	}
+	blocks = (size + BLOCKSIZE - 1) / BLOCKSIZE;
+	if (blocks > INT_MAX) {
+		inode_pos_finish(fs, &ipos);
+		return 0;
+	}
+	padded = calloc(blocks, BLOCKSIZE);
+	if (!padded) {
+		inode_pos_finish(fs, &ipos);
+		error_msg_and_die("mklink_fs: out of memory");
+	}
+	memcpy(padded, b, size);
+	if (!extend_inode_blk(fs, &ipos, padded, (int)blocks)) {
+		free(padded);
+		inode_pos_finish(fs, &ipos);
+		return 0;
+	}
+	free(padded);
 	inode_pos_finish(fs, &ipos);
 	if (!put_nod(ni)) return 0;
 	return nod;
